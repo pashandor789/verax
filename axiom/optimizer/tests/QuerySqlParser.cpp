@@ -16,20 +16,8 @@
 
 #include "axiom/optimizer/tests/QuerySqlParser.h"
 #include "velox/duckdb/conversion/DuckConversion.h"
+#include "velox/parse/DuckLogicalOperator.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
-
-#include <duckdb/planner/operator/logical_get.hpp> // @manual
-#include <duckdb/planner/operator/logical_filter.hpp> // @manual
-#include <duckdb/planner/operator/logical_projection.hpp> // @manual
-#include <duckdb/planner/operator/logical_aggregate.hpp> // @manual
-#include <duckdb/planner/operator/logical_cross_product.hpp> // @manual
-#include <duckdb/planner/operator/logical_limit.hpp> // @manual
-#include <duckdb/planner/operator/logical_order.hpp> // @manual
-#include <duckdb/planner/operator/logical_join.hpp> // @manual
-#include <duckdb/planner/operator/logical_comparison_join.hpp> // @manual
-#include <duckdb/planner/operator/logical_delim_get.hpp> // @manual
-#include <duckdb/planner/operator/logical_delim_join.hpp> // @manual
-#include <duckdb/planner/operator/logical_any_join.hpp> // @manual
 
 #include <duckdb.hpp> // @manual
 #include <duckdb/main/connection.hpp> // @manual
@@ -520,7 +508,7 @@ lp::LogicalPlanNodePtr toPlanNode(
       /* condition */ nullptr);
 }
 
-lp::JoinType ConvertToLogicalPlanJoinType(
+lp::JoinType toJoinType(
   ::duckdb::JoinType& join
 ) {
   switch (join) {
@@ -540,6 +528,10 @@ lp::JoinType ConvertToLogicalPlanJoinType(
   }
 }
 
+std::shared_ptr<const RowType> joinInputType(const std::vector<lp::LogicalPlanNodePtr>& sources) {
+  return sources[0]->outputType()->unionWith(sources[1]->outputType());;
+}
+
 lp::LogicalPlanNodePtr toPlanNode(
     ::duckdb::LogicalComparisonJoin& join,
     memory::MemoryPool* pool,
@@ -547,15 +539,13 @@ lp::LogicalPlanNodePtr toPlanNode(
     QueryContext& queryContext) {
   VELOX_CHECK_EQ(2, sources.size());
 
-  lp::JoinType joinType = ConvertToLogicalPlanJoinType(join.join_type);
-
-  const auto joinInputType =
-      sources[0]->outputType()->unionWith(sources[1]->outputType());
+  auto joinType = toJoinType(join.join_type);
+  const auto inputType = joinInputType(sources);
 
   lp::ExprPtr filter;
   for (auto& condition : join.conditions) {
     auto expr = ::duckdb::JoinCondition::CreateExpression(std::move(condition));
-    auto conjunct = toExpr(*expr, joinInputType);
+    auto conjunct = toExpr(*expr, inputType);
 
     if (!filter) {
       filter = conjunct;
@@ -575,12 +565,12 @@ lp::LogicalPlanNodePtr toPlanNode(
     QueryContext& queryContext) {
   VELOX_CHECK_EQ(2, sources.size());
 
-  lp::JoinType joinType = ConvertToLogicalPlanJoinType(join.join_type);
+  auto joinType = toJoinType(join.join_type);
 
   lp::ExprPtr filter;
   if (join.condition) {
-    const auto joinInputType = sources[0]->outputType()->unionWith(sources[1]->outputType());
-    filter = toExpr(*join.condition, joinInputType);
+    const auto inputType = joinInputType(sources);
+    filter = toExpr(*join.condition, inputType);
   }
 
   return std::make_shared<lp::JoinNode>(
